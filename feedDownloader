@@ -56,7 +56,7 @@ sub getFile
 
     die($res->content . "--- for $url") if (!$res->is_success);
 
-    my $filename = File::Spec->catdir($config->{'main'}->{'torrentDir'}, $outputFilename);
+    my $filename = File::Spec->catdir($config->{'main'}->{'downloadDir'}, $outputFilename);
     open(FILE, ">", $filename)
         or die("unable to open $filename for writing: $!");
     binmode(FILE);
@@ -153,7 +153,9 @@ foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
         }
         $title =~ s/\W/_/g;
         debug("[loop-link] %s", $entry->link);
-        getFile($entry->link, $title . '.torrent');
+        my $filename = $title;
+        $filename =. $config->{$configArea}->{forceExtension} if $config->{$configArea}->{forceExtension};
+        getFile($entry->link, $filename);
     }
 }
 

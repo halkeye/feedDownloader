@@ -1,0 +1,20 @@
+USAGE / INSTALL
+
+Make a .feedDownloader file in your home directory
+Inside it you need a [main] section, with a minimum of downloadDir and url0
+
+options for [url#] blocks:
+
+forceExtension=.download --- to auto add .download ext to the filename when saving
+
+
+------------
+ex:
+
+[main]
+downloadDir = /path/to/blah
+url0=http://path/to/rss/feed
+
+[url0]
+# Download everything
+filter0=.*
