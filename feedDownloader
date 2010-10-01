@@ -1,0 +1,178 @@
+#!/usr/bin/perl -w
+use strict;
+use warnings;
+use Data::Dumper;
+use File::HomeDir ();
+use Config::Tiny;
+use XML::Feed;
+use File::Spec;
+use Getopt::Long;
+use LWP::UserAgent;
+
+
+my ($debug, $configFile);
+$debug = 1 if $ENV{VIM};
+
+GetOptions (
+    "config=s"   => \$configFile,      # string
+    "debug"      => \$debug
+);  # flag
+
+# Open the config
+$configFile ||= File::Spec->catdir( File::HomeDir->my_home,'.feedDownloader');
+my $config = -e $configFile ? Config::Tiny->read( $configFile ) : Config::Tiny->new($configFile);
+die("Unable to load config file: $configFile") unless $config;
+my $configFileHasChanged = 0;
+
+sub debug 
+{
+    return unless $config->{'main'}->{'debug'} || $debug;
+    print STDERR sprintf shift, @_;
+    print STDERR "\n";
+}
+
+sub buildUrls
+{
+    my @urls;
+    my $count = 0;
+    while (1) {
+        last unless exists $config->{'main'}->{'url'.$count};
+        push @urls, ["url$count", $config->{'main'}->{'url'.$count}];
+        $count++;
+    };
+    return @urls;
+}
+
+sub buildFilters
+{
+    my ($area) = @_;
+    my @filters;
+    my $count = 0;
+    while (1) {
+        last unless exists $config->{$area}->{'filter'.$count};
+        push @filters, qr($config->{$area}->{'filter'.$count})i;
+        $count++;
+    };
+    return @filters;
+}
+
+sub getFile
+{
+    my ($url, $outputFilename) = @_;
+    my $ua  = LWP::UserAgent->new;
+    # force allowing of proxies
+    $ua->env_proxy;
+
+    my $res = URI::Fetch->fetch($url, UserAgent => $ua)
+        or return die("Error for $url - " . URI::Fetch->errstr);
+
+    die("This feed has been permanently removed")
+        if $res->status == URI::Fetch::URI_GONE();
+
+    my $filename = File::Spec->catdir($config->{'main'}->{'torrentDir'}, $outputFilename);
+    open(FILE, ">", $filename)
+        or die("unable to open $filename for writing: $!");
+    binmode(FILE);
+    print FILE $res->content;
+    close FILE
+        or die("Unable to close $filename: $!");
+}
+
+sub getFilter
+{
+    my ($title, @filters) = @_;
+    my $count = 0;
+    foreach (@filters)
+    {
+        if ($title =~ $_)
+        {
+            my ($season, $episode) = $title =~ $_;
+            $episode ||= 0;
+            return ($count, $season, $episode);
+        }
+
+
+        $count++;
+    }
+    return (undef, undef, undef);
+}
+
+
+my $ua = LWP::UserAgent->new;
+$ua->agent("feedDownloader/0.1 ");
+
+#my @urls = buildUrls();
+#foreach  (@urls)
+foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
+{
+    my $configArea = $_;
+    my @urls = $config->{'main'}->{$_};
+    push @urls, map { $config->{'main'}->{$_} } grep { 
+        /^$configArea\.mirror\d+$/ }
+    keys %{$config->{'main'}};
+
+    my $feed;
+    my @errors;
+
+    debug("[urls] %s -- %s", $configArea, Data::Dumper::Dumper(\@urls));
+    foreach my $url (@urls)
+    {
+        debug( "[url] %s|%s)", $url, $configArea);
+        my $req = HTTP::Request->new(GET => $url);
+        # Pass request to the user agent and get a response back
+        my $res = $ua->request($req);
+
+        if (!$res->is_success) 
+        {
+            push @errors, "$url - " . $res->content;
+            next;
+        }
+
+        $feed = XML::Feed->parse(\$res->content);
+        if (!$feed)
+        {
+            push @errors, "$url - " . XML::Feed->errstr;
+            next;
+        }
+        last;
+    }
+
+
+    if (!$feed)
+    {
+        die Data::Dumper::Dumper(\@errors);
+    }
+
+    debug($feed->title);
+    
+    my @filters = buildFilters($configArea);
+    for my $entry ($feed->entries) {
+        my $title = $entry->title;
+        $title =~ s/^\s*eztv_it:\s*//;
+        debug("[loop-title] %s",  $title);
+        my ($count, $season, $episode) = getFilter($title, @filters);
+        next unless defined $count;
+        debug("[loop-foundMatch] %s",  $title);
+
+        if ( defined $season )
+        {
+            ### Set a default
+            $config->{$configArea}->{'seen'.$count} ||= '0|0';
+            ### Strip out anything that isn't numeric
+            $season =~ s/([^[:digit:]]*)//g;
+            # Retrieve old values
+            my ($seenSeason, $seenEpisode) = split('\|', $config->{$configArea}->{'seen'.$count});
+            # skip if already seen
+            debug("[loop-epMtch] %d >= %d && %d > %d", $season, $seenSeason, $episode, $seenEpisode);
+            next unless (($season == $seenSeason && $episode > $seenEpisode) || $season > $seenSeason);
+            $configFileHasChanged = 1;
+            $config->{$configArea}->{'seen'.$count} = $season . '|' . $episode;
+        }
+        $title =~ s/\W/_/g;
+        debug("[loop-link] %s", $entry->link);
+        getFile($entry->link, $title . '.torrent');
+    }
+}
+
+$config->write($configFile) if ($configFileHasChanged);
+
