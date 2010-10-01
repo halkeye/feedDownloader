@@ -24,6 +24,12 @@ my $config = -e $configFile ? Config::Tiny->read( $configFile ) : Config::Tiny->
 die("Unable to load config file: $configFile") unless $config;
 my $configFileHasChanged = 0;
 
+my $ua = LWP::UserAgent->new;
+$ua->agent("feedDownloader/0.1 ");
+# force allowing of proxies
+$ua->env_proxy;
+
+
 sub debug 
 {
     return unless $config->{'main'}->{'debug'} || $debug;
@@ -31,43 +37,24 @@ sub debug
     print STDERR "\n";
 }
 
-sub buildUrls
-{
-    my @urls;
-    my $count = 0;
-    while (1) {
-        last unless exists $config->{'main'}->{'url'.$count};
-        push @urls, ["url$count", $config->{'main'}->{'url'.$count}];
-        $count++;
-    };
-    return @urls;
-}
-
 sub buildFilters
 {
     my ($area) = @_;
-    my @filters;
-    my $count = 0;
-    while (1) {
-        last unless exists $config->{$area}->{'filter'.$count};
-        push @filters, qr($config->{$area}->{'filter'.$count})i;
-        $count++;
-    };
+
+    my @filters = map { $config->{$area}->{$_} }
+        grep { /^filter\d+$/ } keys %{$config->{$area}};
     return @filters;
 }
 
 sub getFile
 {
     my ($url, $outputFilename) = @_;
-    my $ua  = LWP::UserAgent->new;
-    # force allowing of proxies
-    $ua->env_proxy;
 
-    my $res = URI::Fetch->fetch($url, UserAgent => $ua)
-        or return die("Error for $url - " . URI::Fetch->errstr);
+    my $req = HTTP::Request->new(GET => $url);
+    # Pass request to the user agent and get a response back
+    my $res = $ua->request($req);
 
-    die("This feed has been permanently removed")
-        if $res->status == URI::Fetch::URI_GONE();
+    die($res->content . "--- for $url") if (!$res->is_success);
 
     my $filename = File::Spec->catdir($config->{'main'}->{'torrentDir'}, $outputFilename);
     open(FILE, ">", $filename)
@@ -98,11 +85,6 @@ sub getFilter
 }
 
 
-my $ua = LWP::UserAgent->new;
-$ua->agent("feedDownloader/0.1 ");
-
-#my @urls = buildUrls();
-#foreach  (@urls)
 foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
 {
     my $configArea = $_;
@@ -146,7 +128,8 @@ foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
     debug($feed->title);
     
     my @filters = buildFilters($configArea);
-    for my $entry ($feed->entries) {
+    for my $entry ($feed->entries) 
+    {
         my $title = $entry->title;
         $title =~ s/^\s*eztv_it:\s*//;
         debug("[loop-title] %s",  $title);
