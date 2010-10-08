@@ -41,8 +41,10 @@ sub buildFilters
 {
     my ($area) = @_;
 
-    my @filters = map { $config->{$area}->{$_} }
-        grep { /^filter\d+$/ } keys %{$config->{$area}};
+    my @filters = map { 
+        my ($id) = $_ =~ m/(\d+)$/;
+        { key => $_, seenKey => "seen$id", filter => $config->{$area}->{$_} }
+    } grep { /^filter\d+$/ } keys %{$config->{$area}};
     return @filters;
 }
 
@@ -68,18 +70,14 @@ sub getFile
 sub getFilter
 {
     my ($title, @filters) = @_;
-    my $count = 0;
     foreach (@filters)
     {
-        if ($title =~ $_)
+        if ($title =~ $_->{filter})
         {
-            my ($season, $episode) = $title =~ $_;
+            my ($season, $episode) = $title =~ $_->{filter};
             $episode ||= 0;
-            return ($count, $season, $episode);
+            return ($_->{seenKey}, $season, $episode);
         }
-
-
-        $count++;
     }
     return (undef, undef, undef);
 }
@@ -122,7 +120,8 @@ foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
 
     if (!$feed)
     {
-        die Data::Dumper::Dumper(\@errors);
+        print Data::Dumper::Dumper(\@errors);
+        next;
     }
 
     debug($feed->title);
@@ -133,23 +132,23 @@ foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
         my $title = $entry->title;
         $title =~ s/^\s*eztv_it:\s*//;
         debug("[loop-title] %s",  $title);
-        my ($count, $season, $episode) = getFilter($title, @filters);
-        next unless defined $count;
-        debug("[loop-foundMatch] %s",  $title);
+        my ($seenKey, $season, $episode) = getFilter($title, @filters);
+        next unless defined $seenKey;
+        debug("[loop-foundMatch] %s - %s", $seenKey, $title);
 
         if ( defined $season )
         {
             ### Set a default
-            $config->{$configArea}->{'seen'.$count} ||= '0|0';
+            $config->{$configArea}->{$seenKey} ||= '0|0';
             ### Strip out anything that isn't numeric
             $season =~ s/([^[:digit:]]*)//g;
             # Retrieve old values
-            my ($seenSeason, $seenEpisode) = split('\|', $config->{$configArea}->{'seen'.$count});
+            my ($seenSeason, $seenEpisode) = split('\|', $config->{$configArea}->{$seenKey});
             # skip if already seen
             debug("[loop-epMtch] %d >= %d && %d > %d", $season, $seenSeason, $episode, $seenEpisode);
             next unless (($season == $seenSeason && $episode > $seenEpisode) || $season > $seenSeason);
             $configFileHasChanged = 1;
-            $config->{$configArea}->{'seen'.$count} = $season . '|' . $episode;
+            $config->{$configArea}->{$seenKey} = $season . '|' . $episode;
         }
         $title =~ s/\W/_/g;
         debug("[loop-link] %s", $entry->link);
