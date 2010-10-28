@@ -50,7 +50,7 @@ sub buildFilters
 
 sub getFile
 {
-    my ($url, $outputFilename) = @_;
+    my ($url, $outputFilename, $referer) = @_;
 
     my $req = HTTP::Request->new(GET => $url);
     # Pass request to the user agent and get a response back
@@ -83,7 +83,9 @@ sub getFilter
 }
 
 
-foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
+my @keys = @ARGV;
+@keys = grep { /^url\d+$/ } keys %{$config->{'main'}} unless @keys;
+foreach  (@keys)
 {
     my $configArea = $_;
     my @urls = $config->{'main'}->{$_};
@@ -151,10 +153,43 @@ foreach  (grep { /^url\d+$/ } keys %{$config->{'main'}})
             $config->{$configArea}->{$seenKey} = $season . '|' . $episode;
         }
         $title =~ s/\W/_/g;
-        debug("[loop-link] %s", $entry->link);
+        my $link = $entry->link;
+        if (my $rewrite = $config->{$configArea}->{urlRewrite})
+        {
+            eval("\$link =~ $rewrite");
+            warn("Unable to rewrite $link: $@") if $@;
+        }
+        if (my $regex = $config->{$configArea}->{urlFromContent})
+        {
+            my $req = HTTP::Request->new(GET => $entry->link);
+            my $res = $ua->request($req);
+            if (!$res->is_success())
+            {
+                warn("Unable to get link: " . $res->decoded_content);
+                next;
+            }
+            ($link) = $res->decoded_content =~ qr/$regex/;
+            if ($link && $link !~ m{://})
+            {
+                my $url = URI->new($entry->link);
+                print "$url $link\n";
+                $url->path_query($link);
+                print "$url $link\n";
+                $link = $url->as_string;
+            }
+        }
+        debug("[loop-link] %s => %s", $entry->link, $link);
+
         my $filename = $title;
-        $filename .= $config->{$configArea}->{forceExtension} if $config->{$configArea}->{forceExtension};
-        getFile($entry->link, $filename);
+        if ($config->{$configArea}->{forceExtension})
+        {
+            $filename .= $config->{$configArea}->{forceExtension} 
+        }
+        else
+        {
+            $filename = File::Basename::basename($link);
+        }
+        getFile($link, $filename);
     }
 }
 
