@@ -177,19 +177,26 @@ foreach  (@keys)
                 print "$url $link\n";
                 $link = $url->as_string;
             }
+            if (!$link)
+            {
+                print Dumper($res->decoded_content);
+            }
         }
-        debug("[loop-link] %s => %s", $entry->link, $link);
+        if ($link)
+        {
+            debug("[loop-link] %s => %s", $entry->link, $link);
 
-        my $filename = $title;
-        if ($config->{$configArea}->{forceExtension})
-        {
-            $filename .= $config->{$configArea}->{forceExtension} 
+            my $filename = $title;
+            if ($config->{$configArea}->{forceExtension})
+            {
+                $filename .= $config->{$configArea}->{forceExtension} 
+            }
+            else
+            {
+                $filename = File::Basename::basename($link);
+            }
+            getFile($link, $filename);
         }
-        else
-        {
-            $filename = File::Basename::basename($link);
-        }
-        getFile($link, $filename);
     }
 }
 
