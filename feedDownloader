@@ -8,7 +8,11 @@ use XML::Feed;
 use File::Spec;
 use Getopt::Long;
 use LWP::UserAgent;
+use Cache::File;
+use Cache;
 
+
+my $cache = Cache::File->new( cache_root => '/tmp/feedDownloader', default_expires => '10 min' );
 
 my ($debug, $configFile);
 $debug = 1 if $ENV{VIM};
@@ -72,12 +76,9 @@ sub getFilter
     my ($title, @filters) = @_;
     foreach (@filters)
     {
-        if ($title =~ $_->{filter})
-        {
-            my ($season, $episode) = $title =~ $_->{filter};
-            $episode ||= 0;
-            return ($_->{seenKey}, $season, $episode);
-        }
+        my (@parts) = $title =~ $_->{filter};
+        next unless @parts;
+        return $_->{seenKey}, @parts;
     }
     return (undef, undef, undef);
 }
@@ -100,17 +101,24 @@ foreach  (@keys)
     foreach my $url (@urls)
     {
         debug( "[url] %s|%s)", $url, $configArea);
-        my $req = HTTP::Request->new(GET => $url);
-        # Pass request to the user agent and get a response back
-        my $res = $ua->request($req);
-
-        if (!$res->is_success) 
+        my $content = $cache->get( $configArea );
+        if (!$content)
         {
-            push @errors, "$url - " . $res->content;
-            next;
-        }
+            debug("[fetchUrl] %s", $url);
+            my $req = HTTP::Request->new(GET => $url);
+            # Pass request to the user agent and get a response back
+            my $res = $ua->request($req);
 
-        $feed = XML::Feed->parse(\$res->content);
+            if (!$res->is_success) 
+            {
+                push @errors, "$url - " . $res->content;
+                next;
+            }
+
+            $content = $res->content;
+            $cache->set($configArea, $content);
+        }
+        $feed = XML::Feed->parse(\$content);
         if (!$feed)
         {
             push @errors, "$url - " . XML::Feed->errstr;
@@ -134,23 +142,30 @@ foreach  (@keys)
         my $title = $entry->title;
         $title =~ s/^\s*eztv_it:\s*//;
         debug("[loop-title] %s",  $title);
-        my ($seenKey, $season, $episode) = getFilter($title, @filters);
+        my ($seenKey, @parts) = getFilter($title, @filters);
         next unless defined $seenKey;
         debug("[loop-foundMatch] %s - %s", $seenKey, $title);
 
-        if ( defined $season )
+        if ( @parts && defined $parts[0] )
         {
             ### Set a default
             $config->{$configArea}->{$seenKey} ||= '0|0';
+
             ### Strip out anything that isn't numeric
-            $season =~ s/([^[:digit:]]*)//g;
+            foreach (@parts)
+            {
+                s/([^[:digit:]]*)//g;
+            }
+
             # Retrieve old values
-            my ($seenSeason, $seenEpisode) = split('\|', $config->{$configArea}->{$seenKey});
+            my $seenInfo = join('', map { sprintf("%04d", $_) } split('\|', $config->{$configArea}->{$seenKey}));
+            my $newInfo = join('', map { sprintf("%04d", $_) } @parts);
+
             # skip if already seen
-            debug("[loop-epMtch] %d >= %d && %d > %d", $season, $seenSeason, $episode, $seenEpisode);
-            next unless (($season == $seenSeason && $episode > $seenEpisode) || $season > $seenSeason);
+            debug("[loop-epMtch] skip if %s >= %s = %s", $seenInfo, $newInfo, $seenInfo >= $newInfo ? 1 : 0);
+            next if ($seenInfo >= $newInfo);
             $configFileHasChanged = 1;
-            $config->{$configArea}->{$seenKey} = $season . '|' . $episode;
+            $config->{$configArea}->{$seenKey} = join('|', @parts);
         }
         $title =~ s/\W/_/g;
         my $link = $entry->link;
